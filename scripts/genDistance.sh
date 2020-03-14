@@ -70,10 +70,9 @@ if [ $RESUME -le $STEP ]; then
       rm callgraph.dot
     done
 
-    #TODO Integrate several call graphs into one
-    callgraph=$(ls -1d callgraph.* | head -n1)
-    cp $callgraph callgraph.dot
-    echo "($STEP) TODO: Integrate several call graphs into one. Now using $callgraph."
+    #Integrate several call graphs into one
+    $AFLGO/merge_callgraphs.py -o callgraph.dot $(ls callgraph.*)
+    echo "($STEP) Integrating several call graphs into one."
 
   else
 
@@ -97,7 +96,7 @@ if [ $RESUME -le $STEP ]; then
   echo "($STEP) Computing distance for call graph .."
 
   $AFLGO/distance.py -d $TMPDIR/dot-files/callgraph.dot -t $TMPDIR/Ftargets.txt -n $TMPDIR/Fnames.txt -o $TMPDIR/distance.callgraph.txt > $TMPDIR/step${STEP}.log 2>&1 || FAIL=1
- 
+
   if [ $(cat $TMPDIR/distance.callgraph.txt | wc -l) -eq 0 ]; then
     FAIL=1
     next_step
@@ -108,11 +107,9 @@ if [ $RESUME -le $STEP ]; then
 
     # Skip CFGs of functions we are not calling
     if ! grep "$(basename $f | cut -d. -f2)" $TMPDIR/dot-files/callgraph.dot >/dev/null; then
-   #   printf "\nSkipping $f..\n"
+      printf "\nSkipping $f..\n"
       continue
     fi
-
-    printf "."
 
     #Clean up duplicate lines and \" in labels (bug in Pydotplus)
     awk '!a[$0]++' $f > ${f}.smaller.dot
@@ -123,10 +120,11 @@ if [ $RESUME -le $STEP ]; then
     sed -i 's/\(^\s*[0-9a-zA-Z_]*\):[a-zA-Z0-9]*\( -> \)/\1\2/g' $f
 
     #Compute distance
-    $AFLGO/distance.py -d $f -t $TMPDIR/BBtargets.txt -n $TMPDIR/BBnames.txt -s $TMPDIR/BBcalls.txt -c $TMPDIR/distance.callgraph.txt -o ${f}.distances.txt -a $TMPDIR/test.txt >> $TMPDIR/step${STEP}.log 2>&1 #|| FAIL=1
-  #  if [ $? -ne 0 ]; then
-  #    echo -e "\e[93;1m[!]\e[0m Could not calculate distance for $f."
-  #  fi
+    printf "\nComputing distance for $f..\n"
+    $AFLGO/distance.py -d $f -t $TMPDIR/BBtargets.txt -n $TMPDIR/BBnames.txt -s $TMPDIR/BBcalls.txt -c $TMPDIR/distance.callgraph.txt -o ${f}.distances.txt >> $TMPDIR/step${STEP}.log 2>&1 #|| FAIL=1
+    if [ $? -ne 0 ]; then
+      echo -e "\e[93;1m[!]\e[0m Could not calculate distance for $f."
+    fi
     #if [ $FAIL -eq 1 ]; then
     #  next_step #Fail asap.
     #fi

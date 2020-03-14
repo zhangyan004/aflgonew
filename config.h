@@ -21,7 +21,7 @@
 
 /* Version string: */
 
-#define VERSION             "2.49b"
+#define VERSION             "2.52b"
 
 /******************************************************
  *                                                    *
@@ -317,7 +317,6 @@
 #define MAP_SIZE_POW2       16
 #define MAP_SIZE            (1 << MAP_SIZE_POW2)
 
-
 /* 
    Matrix size for the traced binary (2^MATRIX_SIZE_POW2).
    In Shared memory, each branch is stored in a corresponding location.
@@ -327,7 +326,6 @@
 #define MATRIX_SIZE         (1 << MATRIX_SIZE_POW2)
 #define MATRIX_SIZE_SQUARE  11
 #define MATRIX_SIZE_SIDE    (1 << MATRIX_SIZE_SQUARE)
-
 
 /* Maximum allocator request size (keep well under INT_MAX): */
 

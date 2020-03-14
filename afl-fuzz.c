@@ -6,7 +6,7 @@
 
    Forkserver design by Jann Horn <jannhorn@googlemail.com>
 
-   Copyright 2013, 2014, 2015, 2016 Google Inc. All rights reserved.
+   Copyright 2013, 2014, 2015, 2016, 2017 Google Inc. All rights reserved.
 
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -130,7 +130,9 @@ EXP_ST u8  skip_deterministic,        /* Skip deterministic stages?       */
            qemu_mode,                 /* Running in QEMU mode?            */
            skip_requested,            /* Skip request, via SIGUSR1        */
            run_over10m,               /* Run time over 10 minutes?        */
-           persistent_mode;           /* Running in persistent mode?      */
+           persistent_mode,           /* Running in persistent mode?      */
+           deferred_mode,             /* Deferred forkserver mode?        */
+           fast_cal;                  /* Try to calibrate faster?         */
 
 static s32 out_fd,                    /* Persistent fd for out_file       */
            dev_urandom_fd = -1,       /* Persistent fd for /dev/urandom   */
@@ -864,8 +866,8 @@ EXP_ST void destroy_queue(void) {
 
 EXP_ST void write_bitmap(void) {
 
-  u8* fname,fn;
-  s32 fd,fdd;
+  u8* fname;
+  s32 fd;
 
   if (!bitmap_changed) return;
   bitmap_changed = 0;
@@ -875,12 +877,11 @@ EXP_ST void write_bitmap(void) {
   
   fn = alloc_printf("%s/fuzzing_MATRIX", out_dir);
   fdd = open(fn, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-  
 
-  if (fd < 0 || fdd < 0) PFATAL("Unable to open '%s' or '%s'", fname,fn);
+  if (fd < 0 || fdd < 0) PFATAL("Unable to open '%s'", fname);
 
   ck_write(fd, virgin_bits, MAP_SIZE, fname);
-  ck_write(fdd, virgin_bits, MAP_SIZE, fn);
+  ck_write(fdd, branch_matrix, MATRIX_SIZE, fn);
 
   close(fd);
   close(fdd);
@@ -1258,7 +1259,7 @@ static void remove_shm(void) {
 
   shmctl(shm_id, IPC_RMID, NULL);
   shmctl(shm_matrix_id, IPC_RMID, NULL);
-  
+
 }
 
 
@@ -1394,7 +1395,7 @@ static void cull_queue(void) {
 }
 
 
-/* Configure shared memory , virgin_bits and branch_matrix. This is called at startup. */
+/* Configure shared memory and virgin_bits. This is called at startup. */
 
 EXP_ST void setup_shm(void) {
 
@@ -1403,20 +1404,18 @@ EXP_ST void setup_shm(void) {
 
   if (!in_bitmap) {
 	  memset(virgin_bits, 255, MAP_SIZE);
-	  memset(branch_matrix, 255, MATRIX_SIZE);
-  }
-
+      memset(branch_matrix, 255, MATRIX_SIZE);
+    }
   memset(virgin_tmout, 255, MAP_SIZE);
   memset(virgin_crash, 255, MAP_SIZE);
   
   memset(frequent_matrix, 255, MATRIX_SIZE);
   memset(not_frequent_matrix, 255, MATRIX_SIZE);
 
-  /* Allocate 24 byte more for distance info
-     Allocate MATRIX_SIZE byte more for another SHM*/
+  /* Allocate 24 byte more for distance info */
   shm_id = shmget(IPC_PRIVATE, MAP_SIZE + 16, IPC_CREAT | IPC_EXCL | 0600);
   shm_matrix_id = shmget(IPC_PRIVATE, MATRIX_SIZE, IPC_CREAT | IPC_EXCL | 0600);
-
+   
   if (shm_id < 0 || shm_matrix_id < 0) PFATAL("shmget() failed");
 
   atexit(remove_shm);
@@ -1430,10 +1429,10 @@ EXP_ST void setup_shm(void) {
      later on, perhaps? */
 
   if (!dumb_mode) {
-	setenv(SHM_ENV_VAR, shm_str, 1);
-	setenv(SHM_ENV_VARI, shm_str1, 1);
+	  setenv(SHM_ENV_VAR, shm_str, 1);
+      setenv(SHM_ENV_VARI, shm_str1, 1);
   }
-
+  
   ck_free(shm_str);
   ck_free(shm_str1);
 
@@ -1441,7 +1440,6 @@ EXP_ST void setup_shm(void) {
   trace_branch = shmat(shm_matrix_id, NULL, 0);
   
   if (!trace_bits || !trace_branch) PFATAL("shmat() failed");
-
 
 }
 
@@ -2283,10 +2281,10 @@ EXP_ST void init_forkserver(char** argv) {
   if (mem_limit && mem_limit < 500 && uses_asan) {
 
     SAYF("\n" cLRD "[-] " cRST
-         "Hmm, looks like the target binary terminated before we could complete a\n"
-         "    handshake with the injected code. Since it seems to be built with ASAN and\n"
-         "    you have a restrictive memory limit configured, this is expected; please\n"
-         "    read %s/notes_for_asan.txt for help.\n", doc_path);
+           "Hmm, looks like the target binary terminated before we could complete a\n"
+           "    handshake with the injected code. Since it seems to be built with ASAN and\n"
+           "    you have a restrictive memory limit configured, this is expected; please\n"
+           "    read %s/notes_for_asan.txt for help.\n", doc_path);
 
   } else if (!mem_limit) {
 
@@ -2359,107 +2357,107 @@ static u8 run_target(char** argv, u32 timeout) {
 
   if (dumb_mode == 1 || no_forkserver) {
 
-		child_pid = fork();
+    child_pid = fork();
 
-		if (child_pid < 0) PFATAL("fork() failed");
+    if (child_pid < 0) PFATAL("fork() failed");
 
-		if (!child_pid) {
+    if (!child_pid) {
 
-			struct rlimit r;
+      struct rlimit r;
 
-			if (mem_limit) {
+      if (mem_limit) {
 
-				r.rlim_max = r.rlim_cur = ((rlim_t)mem_limit) << 20;
+        r.rlim_max = r.rlim_cur = ((rlim_t)mem_limit) << 20;
 
 #ifdef RLIMIT_AS
 
-				setrlimit(RLIMIT_AS, &r); /* Ignore errors */
+        setrlimit(RLIMIT_AS, &r); /* Ignore errors */
 
 #else
 
-				setrlimit(RLIMIT_DATA, &r); /* Ignore errors */
+        setrlimit(RLIMIT_DATA, &r); /* Ignore errors */
 
 #endif /* ^RLIMIT_AS */
 
-			}
+      }
 
-			r.rlim_max = r.rlim_cur = 0;
+      r.rlim_max = r.rlim_cur = 0;
 
-			setrlimit(RLIMIT_CORE, &r); /* Ignore errors */
+      setrlimit(RLIMIT_CORE, &r); /* Ignore errors */
 
-			/* Isolate the process and configure standard descriptors. If out_file is
-				specified, stdin is /dev/null; otherwise, out_fd is cloned instead. */
+      /* Isolate the process and configure standard descriptors. If out_file is
+         specified, stdin is /dev/null; otherwise, out_fd is cloned instead. */
 
-			setsid();
+      setsid();
 
-			dup2(dev_null_fd, 1);
-			dup2(dev_null_fd, 2);
+      dup2(dev_null_fd, 1);
+      dup2(dev_null_fd, 2);
 
-			if (out_file) {
+      if (out_file) {
 
-				dup2(dev_null_fd, 0);
+        dup2(dev_null_fd, 0);
 
-			} else {
+      } else {
 
-				dup2(out_fd, 0);
-				close(out_fd);
+        dup2(out_fd, 0);
+        close(out_fd);
 
-			}
+      }
 
-			/* On Linux, would be faster to use O_CLOEXEC. Maybe TODO. */
+      /* On Linux, would be faster to use O_CLOEXEC. Maybe TODO. */
 
-			close(dev_null_fd);
-			close(out_dir_fd);
-			close(dev_urandom_fd);
-			close(fileno(plot_file));
+      close(dev_null_fd);
+      close(out_dir_fd);
+      close(dev_urandom_fd);
+      close(fileno(plot_file));
 
-            /* Set sane defaults for ASAN if nothing else specified. */
+      /* Set sane defaults for ASAN if nothing else specified. */
 
-			setenv("ASAN_OPTIONS", "abort_on_error=1:"
-								   "detect_leaks=0:"
-								   "symbolize=0:"
-								   "allocator_may_return_null=1", 0);
+      setenv("ASAN_OPTIONS", "abort_on_error=1:"
+                             "detect_leaks=0:"
+                             "symbolize=0:"
+                             "allocator_may_return_null=1", 0);
 
-			setenv("MSAN_OPTIONS", "exit_code=" STRINGIFY(MSAN_ERROR) ":"
-								   "symbolize=0:"
-								   "msan_track_origins=0", 0);
+      setenv("MSAN_OPTIONS", "exit_code=" STRINGIFY(MSAN_ERROR) ":"
+                             "symbolize=0:"
+                             "msan_track_origins=0", 0);
 
-			execv(target_path, argv);
+      execv(target_path, argv);
 
-            /* Use a distinctive bitmap value to tell the parent about execv()
-             falling through. */
+      /* Use a distinctive bitmap value to tell the parent about execv()
+         falling through. */
 
-			*(u32*)trace_bits = EXEC_FAIL_SIG;
-			*(u32*)trace_branch = EXEC_FAIL_SIG;
+      *(u32*)trace_bits = EXEC_FAIL_SIG;
+	  *(u32*)trace_branch = EXEC_FAIL_SIG;
 	  
-            exit(0);
+      exit(0);
 
-        }
+    }
 
-    } else {
+  } else {
 
-		s32 res;
+    s32 res;
 
-		/* In non-dumb mode, we have the fork server up and running, so simply
-		tell it to have at it, and then read back PID. */
+    /* In non-dumb mode, we have the fork server up and running, so simply
+       tell it to have at it, and then read back PID. */
 
-		if ((res = write(fsrv_ctl_fd, &prev_timed_out, 4)) != 4) {
+    if ((res = write(fsrv_ctl_fd, &prev_timed_out, 4)) != 4) {
 
-			if (stop_soon) return 0;
-			RPFATAL(res, "Unable to request new process from fork server (OOM?)");
+      if (stop_soon) return 0;
+      RPFATAL(res, "Unable to request new process from fork server (OOM?)");
 
-		}
+    }
 
-		if ((res = read(fsrv_st_fd, &child_pid, 4)) != 4) {
+    if ((res = read(fsrv_st_fd, &child_pid, 4)) != 4) {
 
-			if (stop_soon) return 0;
-			RPFATAL(res, "Unable to request new process from fork server (OOM?)");
+      if (stop_soon) return 0;
+      RPFATAL(res, "Unable to request new process from fork server (OOM?)");
 
-		}
+    }
 
-		if (child_pid <= 0) FATAL("Fork server is misbehaving (OOM?)");
+    if (child_pid <= 0) FATAL("Fork server is misbehaving (OOM?)");
 
-	}
+  }
 
   /* Configure timeout, as requested by user, then wait for child to terminate. */
 
@@ -2472,21 +2470,20 @@ static u8 run_target(char** argv, u32 timeout) {
 
   if (dumb_mode == 1 || no_forkserver) {
 
-        if (waitpid(child_pid, &status, 0) <= 0) 
-		    PFATAL("waitpid() failed");
+    if (waitpid(child_pid, &status, 0) <= 0) PFATAL("waitpid() failed");
 
-    } else {
+  } else {
 
-        s32 res;
+    s32 res;
 
-        if ((res = read(fsrv_st_fd, &status, 4)) != 4) {
+    if ((res = read(fsrv_st_fd, &status, 4)) != 4) {
 
-            if (stop_soon) return 0;
-            RPFATAL(res, "Unable to communicate with fork server (OOM?)");
-
-        }
+      if (stop_soon) return 0;
+      RPFATAL(res, "Unable to communicate with fork server (OOM?)");
 
     }
+
+  }
 
   if (!WIFSTOPPED(status)) child_pid = 0;
 
@@ -2505,7 +2502,6 @@ static u8 run_target(char** argv, u32 timeout) {
 
   tb4 = *(u32*)trace_bits;
   tbh = *(u32*)trace_branch;
-  
 
 #ifdef __x86_64__
   classify_counts((u64*)trace_bits);
@@ -2517,25 +2513,26 @@ static u8 run_target(char** argv, u32 timeout) {
 
   /* Report outcome to caller. */
 
-  if (child_timed_out) return FAULT_TMOUT;
-
   if (WIFSIGNALED(status) && !stop_soon) {
-      kill_signal = WTERMSIG(status); //kill child
-	  OKF("status = '%d';WIFSIGNALED(status)= %d", status,WIFSIGNALED(status));
-      return FAULT_CRASH;
-    }
+
+    kill_signal = WTERMSIG(status);
+
+    if (child_timed_out && kill_signal == SIGKILL) return FAULT_TMOUT;
+
+    return FAULT_CRASH;
+
+  }
 
   /* A somewhat nasty hack for MSAN, which doesn't support abort_on_error and
      must use a special exit code. */
 
   if (uses_asan && WEXITSTATUS(status) == MSAN_ERROR) {
-       kill_signal = 0;
-	   OKF("status '%d'", status);
-       return FAULT_CRASH;
-    }
+    kill_signal = 0;
+    return FAULT_CRASH;
+  }
 
-  if ((dumb_mode == 1 || no_forkserver) && tb4 == EXEC_FAIL_SIG && tbh == EXEC_FAIL_SIG)
-      return FAULT_ERROR;
+  if ((dumb_mode == 1 || no_forkserver) && tb4 == EXEC_FAIL_SIG)
+    return FAULT_ERROR;
 
   return FAULT_NONE;
 
@@ -2612,173 +2609,167 @@ static void show_stats(void);
 static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
                          u32 handicap, u8 from_queue) {
 
-    static u8 first_trace[MAP_SIZE];
+  static u8 first_trace[MAP_SIZE];
 
-    u8  fault = 0, new_bits = 0, var_detected = 0,
-        first_run = (q->exec_cksum == 0);
+  u8  fault = 0, new_bits = 0, var_detected = 0,
+      first_run = (q->exec_cksum == 0);
 
-	u64 start_us, stop_us;
+  u64 start_us, stop_us;
 
-	s32 old_sc = stage_cur, old_sm = stage_max;
-	u32 use_tmout = exec_tmout;
-	u8* old_sn = stage_name;
+  s32 old_sc = stage_cur, old_sm = stage_max;
+  u32 use_tmout = exec_tmout;
+  u8* old_sn = stage_name;
 
-	/* Be a bit more generous about timeouts when resuming sessions, or when
+  /* Be a bit more generous about timeouts when resuming sessions, or when
      trying to calibrate already-added finds. This helps avoid trouble due
      to intermittent latency. */
 
-	if (!from_queue || resuming_fuzz)
-		use_tmout = MAX(exec_tmout + CAL_TMOUT_ADD,
+  if (!from_queue || resuming_fuzz)
+    use_tmout = MAX(exec_tmout + CAL_TMOUT_ADD,
                     exec_tmout * CAL_TMOUT_PERC / 100);
 
-	q->cal_failed++;
+  q->cal_failed++;
 
-	stage_name = "calibration";
-	stage_max  = CAL_CYCLES;
+  stage_name = "calibration";
+  stage_max  = fast_cal ? 3 : CAL_CYCLES;
 
-	/* Make sure the forkserver is up before we do anything, and let's not
+  /* Make sure the forkserver is up before we do anything, and let's not
      count its spin-up time toward binary calibration. */
 
-	if (dumb_mode != 1 && !no_forkserver && !forksrv_pid)
-		init_forkserver(argv);
+  if (dumb_mode != 1 && !no_forkserver && !forksrv_pid)
+    init_forkserver(argv);
 
-	if (q->exec_cksum) memcpy(first_trace, trace_bits, MAP_SIZE);
-  
+  if (q->exec_cksum) memcpy(first_trace, trace_bits, MAP_SIZE);
 
-	start_us = get_cur_time_us();
+  start_us = get_cur_time_us();
 
-	for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
+  for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
 
-		u32 cksum;
+    u32 cksum;
 
-		if (!first_run && !(stage_cur % stats_update_freq)) show_stats();
+    if (!first_run && !(stage_cur % stats_update_freq)) show_stats();
 
-		write_to_testcase(use_mem, q->len);
+    write_to_testcase(use_mem, q->len);
 
-		fault = run_target(argv, use_tmout);
+    fault = run_target(argv, use_tmout);
 
-		/* stop_soon is set by the handler for Ctrl+C. When it's pressed,
+    /* stop_soon is set by the handler for Ctrl+C. When it's pressed,
        we want to bail out quickly. */
 
-		if (stop_soon || fault != crash_mode) goto abort_calibration;
+    if (stop_soon || fault != crash_mode) goto abort_calibration;
 
-		if (!dumb_mode && !stage_cur && !count_bytes(trace_bits)) {
-			fault = FAULT_NOINST;
-		    goto abort_calibration;
-        }
-
-        cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
-
-        /* This is relevant when test cases are added w/out save_if_interesting */
-
-        if (q->distance <= 0) {
-
-            /* This calculates cur_distance */
-            has_new_bits(virgin_bits);
-
-            q->distance = cur_distance;
-            if (cur_distance > 0) {
-
-               if (max_distance <= 0) {
-                    max_distance = cur_distance;
-                    min_distance = cur_distance;
-                }
-               if (cur_distance > max_distance) max_distance = cur_distance;
-               if (cur_distance < min_distance) min_distance = cur_distance;
-
-            }
-
-        }
-
-        if (q->exec_cksum != cksum) {
-
-            u8 hnb = has_new_bits(virgin_bits);
-            if (hnb > new_bits) new_bits = hnb;
-
-            if (q->exec_cksum) {
-
-                u32 i;
-
-                for (i = 0; i < MAP_SIZE; i++) {
-
-                    if (!var_bytes[i] && first_trace[i] != trace_bits[i]) {
-
-                         var_bytes[i] = 1;
-                         stage_max    = CAL_CYCLES_LONG;
-
-                    }
-
-                }
-
-                var_detected = 1;
-
-            } else {
-
-                q->exec_cksum = cksum;
-                memcpy(first_trace, trace_bits, MAP_SIZE);
-
-            }
-
-        }
-		
-		//memcpy(branch_matrix, trace_branch, MATRIX_SIZE);
-		OKF("trace_branch's address = %x", &trace_branch);
-		OKF("trace_bits's address = %x", &trace_bits);
+    if (!dumb_mode && !stage_cur && !count_bytes(trace_bits)) {
+      fault = FAULT_NOINST;
+      goto abort_calibration;
     }
-  
-	stop_us = get_cur_time_us();
 
-	total_cal_us     += stop_us - start_us;
-	total_cal_cycles += stage_max;
+    cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
 
-	/* OK, let's collect some stats about the performance of this test case.
+    /* This is relevant when test cases are added w/out save_if_interesting */
+
+    if (q->distance <= 0) {
+
+      /* This calculates cur_distance */
+      has_new_bits(virgin_bits);
+
+      q->distance = cur_distance;
+      if (cur_distance > 0) {
+
+        if (max_distance <= 0) {
+          max_distance = cur_distance;
+          min_distance = cur_distance;
+        }
+        if (cur_distance > max_distance) max_distance = cur_distance;
+        if (cur_distance < min_distance) min_distance = cur_distance;
+
+      }
+
+    }
+
+    if (q->exec_cksum != cksum) {
+
+      u8 hnb = has_new_bits(virgin_bits);
+      if (hnb > new_bits) new_bits = hnb;
+
+      if (q->exec_cksum) {
+
+        u32 i;
+
+        for (i = 0; i < MAP_SIZE; i++) {
+
+          if (!var_bytes[i] && first_trace[i] != trace_bits[i]) {
+
+            var_bytes[i] = 1;
+            stage_max    = CAL_CYCLES_LONG;
+
+          }
+
+        }
+
+        var_detected = 1;
+
+      } else {
+
+        q->exec_cksum = cksum;
+        memcpy(first_trace, trace_bits, MAP_SIZE);
+
+      }
+
+    }
+
+  }
+
+  stop_us = get_cur_time_us();
+
+  total_cal_us     += stop_us - start_us;
+  total_cal_cycles += stage_max;
+
+  /* OK, let's collect some stats about the performance of this test case.
      This is used for fuzzing air time calculations in calculate_score(). */
 
-	q->exec_us     = (stop_us - start_us) / stage_max;
-	q->bitmap_size = count_bytes(trace_bits);
-	q->handicap    = handicap;
-	q->cal_failed  = 0;
+  q->exec_us     = (stop_us - start_us) / stage_max;
+  q->bitmap_size = count_bytes(trace_bits);
+  q->handicap    = handicap;
+  q->cal_failed  = 0;
 
-	total_bitmap_size += q->bitmap_size;
-	total_bitmap_entries++;
+  total_bitmap_size += q->bitmap_size;
+  total_bitmap_entries++;
 
-	update_bitmap_score(q);
+  update_bitmap_score(q);
 
-	/* If this case didn't result in new output from the instrumentation, tell
+  /* If this case didn't result in new output from the instrumentation, tell
      parent. This is a non-critical problem, but something to warn the user
      about. */
 
-	if (!dumb_mode && first_run && !fault && !new_bits) fault = FAULT_NOBITS;
+  if (!dumb_mode && first_run && !fault && !new_bits) fault = FAULT_NOBITS;
 
 abort_calibration:
 
-	if (new_bits == 2 && !q->has_new_cov) {
-		q->has_new_cov = 1;
-		queued_with_cov++;
-	}
+  if (new_bits == 2 && !q->has_new_cov) {
+    q->has_new_cov = 1;
+    queued_with_cov++;
+  }
 
-	/* Mark variable paths. */
+  /* Mark variable paths. */
 
-	if (var_detected) {
+  if (var_detected) {
 
-		var_byte_count = count_bytes(var_bytes);
+    var_byte_count = count_bytes(var_bytes);
 
-		if (!q->var_behavior) {
-			mark_as_variable(q);
-			queued_variable++;
-		}
+    if (!q->var_behavior) {
+      mark_as_variable(q);
+      queued_variable++;
+    }
 
-	}
+  }
 
-	stage_name = old_sn;
-	stage_cur  = old_sc;
-	stage_max  = old_sm;
+  stage_name = old_sn;
+  stage_cur  = old_sc;
+  stage_max  = old_sm;
 
-	if (!first_run) show_stats();
-	
-	OKF("fault = %d", fault);
+  if (!first_run) show_stats();
 
-	return fault;
+  return fault;
 
 }
 
@@ -2808,198 +2799,198 @@ static void perform_dry_run(char** argv) {
   u32 cal_failures = 0;
   u8* skip_crashes = getenv("AFL_SKIP_CRASHES");
 
-    while (q) {
+  while (q) {
 
-		u8* use_mem;
-		u8  res;
-		s32 fd;
+    u8* use_mem;
+    u8  res;
+    s32 fd;
 
-		u8* fn = strrchr(q->fname, '/') + 1;
+    u8* fn = strrchr(q->fname, '/') + 1;
 
-		ACTF("Attempting dry run with '%s'...", fn);
+    ACTF("Attempting dry run with '%s'...", fn);
 
-		fd = open(q->fname, O_RDONLY);
-		if (fd < 0) PFATAL("Unable to open '%s'", q->fname);
+    fd = open(q->fname, O_RDONLY);
+    if (fd < 0) PFATAL("Unable to open '%s'", q->fname);
 
-		use_mem = ck_alloc_nozero(q->len);
+    use_mem = ck_alloc_nozero(q->len);
 
-		if (read(fd, use_mem, q->len) != q->len)
-			FATAL("Short read from '%s'", q->fname);
+    if (read(fd, use_mem, q->len) != q->len)
+      FATAL("Short read from '%s'", q->fname);
 
-		close(fd);
+    close(fd);
 
-		res = calibrate_case(argv, q, use_mem, 0, 1);
-		ck_free(use_mem);
+    res = calibrate_case(argv, q, use_mem, 0, 1);
+    ck_free(use_mem);
 
-		if (stop_soon) return;
+    if (stop_soon) return;
 
-        if (res == crash_mode || res == FAULT_NOBITS)
-            SAYF(cGRA "    len = %u, map size = %u, exec speed = %llu us\n" cRST, 
-                 q->len, q->bitmap_size, q->exec_us);
+    if (res == crash_mode || res == FAULT_NOBITS)
+      SAYF(cGRA "    len = %u, map size = %u, exec speed = %llu us\n" cRST, 
+           q->len, q->bitmap_size, q->exec_us);
 
-		switch (res) {
+    switch (res) {
 
-			case FAULT_NONE:
+      case FAULT_NONE:
 
-				if (q == queue) check_map_coverage();
+        if (q == queue) check_map_coverage();
 
-				if (crash_mode) FATAL("Test case '%s' does *NOT* crash", fn);
+        if (crash_mode) FATAL("Test case '%s' does *NOT* crash", fn);
 
-			    break;
+        break;
 
-			case FAULT_TMOUT:
+      case FAULT_TMOUT:
 
-				if (timeout_given) {
+        if (timeout_given) {
 
-					/* The -t nn+ syntax in the command line sets timeout_given to '2' and
-					instructs afl-fuzz to tolerate but skip queue entries that time
-					out. */
+          /* The -t nn+ syntax in the command line sets timeout_given to '2' and
+             instructs afl-fuzz to tolerate but skip queue entries that time
+             out. */
 
-					if (timeout_given > 1) {
-						WARNF("Test case results in a timeout (skipping)");
-						q->cal_failed = CAL_CHANCES;
-						cal_failures++;
-						break;
-					}
+          if (timeout_given > 1) {
+            WARNF("Test case results in a timeout (skipping)");
+            q->cal_failed = CAL_CHANCES;
+            cal_failures++;
+            break;
+          }
 
-					SAYF("\n" cLRD "[-] " cRST
-					     "The program took more than %u ms to process one of the initial test cases.\n"
-					     "    Usually, the right thing to do is to relax the -t option - or to delete it\n"
-					     "    altogether and allow the fuzzer to auto-calibrate. That said, if you know\n"
-					     "    what you are doing and want to simply skip the unruly test cases, append\n"
-					     "    '+' at the end of the value passed to -t ('-t %u+').\n", exec_tmout,
-					     exec_tmout);
+          SAYF("\n" cLRD "[-] " cRST
+               "The program took more than %u ms to process one of the initial test cases.\n"
+               "    Usually, the right thing to do is to relax the -t option - or to delete it\n"
+               "    altogether and allow the fuzzer to auto-calibrate. That said, if you know\n"
+               "    what you are doing and want to simply skip the unruly test cases, append\n"
+               "    '+' at the end of the value passed to -t ('-t %u+').\n", exec_tmout,
+               exec_tmout);
 
-					FATAL("Test case '%s' results in a timeout", fn);
+          FATAL("Test case '%s' results in a timeout", fn);
 
-				} else {
+        } else {
 
-					SAYF("\n" cLRD "[-] " cRST
-					     "The program took more than %u ms to process one of the initial test cases.\n"
-					     "    This is bad news; raising the limit with the -t option is possible, but\n"
-					     "    will probably make the fuzzing process extremely slow.\n\n"
+          SAYF("\n" cLRD "[-] " cRST
+               "The program took more than %u ms to process one of the initial test cases.\n"
+               "    This is bad news; raising the limit with the -t option is possible, but\n"
+               "    will probably make the fuzzing process extremely slow.\n\n"
 
-					     "    If this test case is just a fluke, the other option is to just avoid it\n"
-					     "    altogether, and find one that is less of a CPU hog.\n", exec_tmout);
+               "    If this test case is just a fluke, the other option is to just avoid it\n"
+               "    altogether, and find one that is less of a CPU hog.\n", exec_tmout);
 
-					FATAL("Test case '%s' results in a timeout", fn);
-
-				}
-
-			case FAULT_CRASH:  
-
-				if (crash_mode) break;
-
-				if (skip_crashes) {
-					WARNF("Test case results in a crash (skipping)");
-					q->cal_failed = CAL_CHANCES;
-					cal_failures++;
-					break;
-				}
-
-                if (mem_limit) {
-
-                    SAYF("\n" cLRD "[-] " cRST
-					    "Oops, the program crashed with one of the test cases provided. There are\n"
-					    "    several possible explanations:\n\n"
-
-					    "    - The test case causes known crashes under normal working conditions. If\n"
-					    "      so, please remove it. The fuzzer should be seeded with interesting\n"
-					    "      inputs - but not ones that cause an outright crash.\n\n"
-
-					    "    - The current memory limit (%s) is too low for this program, causing\n"
-					    "      it to die due to OOM when parsing valid files. To fix this, try\n"
-					    "      bumping it up with the -m setting in the command line. If in doubt,\n"
-					    "      try something along the lines of:\n\n"
-
-#ifdef RLIMIT_AS
-						"      ( ulimit -Sv $[%llu << 10]; /path/to/binary [...] <testcase )\n\n"
-#else
-						"      ( ulimit -Sd $[%llu << 10]; /path/to/binary [...] <testcase )\n\n"
-#endif /* ^RLIMIT_AS */
-
-					    "      Tip: you can use http://jwilk.net/software/recidivm to quickly\n"
-					    "      estimate the required amount of virtual memory for the binary. Also,\n"
-					    "      if you are using ASAN, see %s/notes_for_asan.txt.\n\n"
-
-#ifdef __APPLE__
-  
-					    "    - On MacOS X, the semantics of fork() syscalls are non-standard and may\n"
-					    "      break afl-fuzz performance optimizations when running platform-specific\n"
-					    "      binaries. To fix this, set AFL_NO_FORKSRV=1 in the environment.\n\n"
-
-#endif /* __APPLE__ */
-
-					    "    - Least likely, there is a horrible bug in the fuzzer. If other options\n"
-					    "      fail, poke <lcamtuf@coredump.cx> for troubleshooting tips.\n",
-					    DMS(mem_limit << 20), mem_limit - 1, doc_path);
-
-				} else {
-
-					SAYF("\n" cLRD "[-] " cRST
-						 "Oops, the program crashed with one of the test cases provided. There are\n"
-						 "    several possible explanations:\n\n"
-
-						 "    - The test case causes known crashes under normal working conditions. If\n"
-						 "      so, please remove it. The fuzzer should be seeded with interesting\n"
-						 "      inputs - but not ones that cause an outright crash.\n\n"
-
-#ifdef __APPLE__
-  
-						 "    - On MacOS X, the semantics of fork() syscalls are non-standard and may\n"
-						 "      break afl-fuzz performance optimizations when running platform-specific\n"
-						 "      binaries. To fix this, set AFL_NO_FORKSRV=1 in the environment.\n\n"
-
-#endif /* __APPLE__ */
-
-						 "    - Least likely, there is a horrible bug in the fuzzer. If other options\n"
-						 " fail, poke <lcamtuf@coredump.cx> for troubleshooting tips.\n");
-
-				}
-
-                FATAL("Test case '%s' results in a crash", fn);
-
-            case FAULT_ERROR:
-
-                FATAL("Unable to execute target application ('%s')", argv[0]);
-
-            case FAULT_NOINST:
-
-                FATAL("No instrumentation detected");
-
-            case FAULT_NOBITS: 
-
-                useless_at_start++;
-
-                if (!in_bitmap && !shuffle_queue)
-                     WARNF("No new instrumentation output, test case may be useless.");
-
-                break;
+          FATAL("Test case '%s' results in a timeout", fn);
 
         }
 
-            if (q->var_behavior) WARNF("Instrumentation output varies across runs.");
+      case FAULT_CRASH:  
 
-            q = q->next;
+        if (crash_mode) break;
+
+        if (skip_crashes) {
+          WARNF("Test case results in a crash (skipping)");
+          q->cal_failed = CAL_CHANCES;
+          cal_failures++;
+          break;
+        }
+
+        if (mem_limit) {
+
+          SAYF("\n" cLRD "[-] " cRST
+               "Oops, the program crashed with one of the test cases provided. There are\n"
+               "    several possible explanations:\n\n"
+
+               "    - The test case causes known crashes under normal working conditions. If\n"
+               "      so, please remove it. The fuzzer should be seeded with interesting\n"
+               "      inputs - but not ones that cause an outright crash.\n\n"
+
+               "    - The current memory limit (%s) is too low for this program, causing\n"
+               "      it to die due to OOM when parsing valid files. To fix this, try\n"
+               "      bumping it up with the -m setting in the command line. If in doubt,\n"
+               "      try something along the lines of:\n\n"
+
+#ifdef RLIMIT_AS
+               "      ( ulimit -Sv $[%llu << 10]; /path/to/binary [...] <testcase )\n\n"
+#else
+               "      ( ulimit -Sd $[%llu << 10]; /path/to/binary [...] <testcase )\n\n"
+#endif /* ^RLIMIT_AS */
+
+               "      Tip: you can use http://jwilk.net/software/recidivm to quickly\n"
+               "      estimate the required amount of virtual memory for the binary. Also,\n"
+               "      if you are using ASAN, see %s/notes_for_asan.txt.\n\n"
+
+#ifdef __APPLE__
+  
+               "    - On MacOS X, the semantics of fork() syscalls are non-standard and may\n"
+               "      break afl-fuzz performance optimizations when running platform-specific\n"
+               "      binaries. To fix this, set AFL_NO_FORKSRV=1 in the environment.\n\n"
+
+#endif /* __APPLE__ */
+
+               "    - Least likely, there is a horrible bug in the fuzzer. If other options\n"
+               "      fail, poke <lcamtuf@coredump.cx> for troubleshooting tips.\n",
+               DMS(mem_limit << 20), mem_limit - 1, doc_path);
+
+        } else {
+
+          SAYF("\n" cLRD "[-] " cRST
+               "Oops, the program crashed with one of the test cases provided. There are\n"
+               "    several possible explanations:\n\n"
+
+               "    - The test case causes known crashes under normal working conditions. If\n"
+               "      so, please remove it. The fuzzer should be seeded with interesting\n"
+               "      inputs - but not ones that cause an outright crash.\n\n"
+
+#ifdef __APPLE__
+  
+               "    - On MacOS X, the semantics of fork() syscalls are non-standard and may\n"
+               "      break afl-fuzz performance optimizations when running platform-specific\n"
+               "      binaries. To fix this, set AFL_NO_FORKSRV=1 in the environment.\n\n"
+
+#endif /* __APPLE__ */
+
+               "    - Least likely, there is a horrible bug in the fuzzer. If other options\n"
+               "      fail, poke <lcamtuf@coredump.cx> for troubleshooting tips.\n");
+
+        }
+
+        FATAL("Test case '%s' results in a crash", fn);
+
+      case FAULT_ERROR:
+
+        FATAL("Unable to execute target application ('%s')", argv[0]);
+
+      case FAULT_NOINST:
+
+        FATAL("No instrumentation detected");
+
+      case FAULT_NOBITS: 
+
+        useless_at_start++;
+
+        if (!in_bitmap && !shuffle_queue)
+          WARNF("No new instrumentation output, test case may be useless.");
+
+        break;
 
     }
 
-    if (cal_failures) {
+    if (q->var_behavior) WARNF("Instrumentation output varies across runs.");
 
-        if (cal_failures == queued_paths)
-            FATAL("All test cases time out%s, giving up!",
-                 skip_crashes ? " or crash" : "");
+    q = q->next;
 
-        WARNF("Skipped %u test cases (%0.02f%%) due to timeouts%s.", cal_failures,
-            ((double)cal_failures) * 100 / queued_paths,
-            skip_crashes ? " or crashes" : "");
+  }
 
-        if (cal_failures * 5 > queued_paths)
-            WARNF(cLRD "High percentage of rejected test cases, check settings!");
+  if (cal_failures) {
 
-    }
+    if (cal_failures == queued_paths)
+      FATAL("All test cases time out%s, giving up!",
+            skip_crashes ? " or crash" : "");
 
-    OKF("All test cases processed.");
+    WARNF("Skipped %u test cases (%0.02f%%) due to timeouts%s.", cal_failures,
+          ((double)cal_failures) * 100 / queued_paths,
+          skip_crashes ? " or crashes" : "");
+
+    if (cal_failures * 5 > queued_paths)
+      WARNF(cLRD "High percentage of rejected test cases, check settings!");
+
+  }
+
+  OKF("All test cases processed.");
 
 }
 
@@ -3241,7 +3232,8 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 
 #ifndef SIMPLE_FILES
 
-    fn = alloc_printf("%s/queue/id:%06u,%s", out_dir, queued_paths,
+    fn = alloc_printf("%s/queue/id:%06u,%llu,%s", out_dir, queued_paths,
+                      get_cur_time() - start_time,
                       describe_op(hnb));
 
 #else
@@ -3313,14 +3305,21 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
         write_to_testcase(mem, len);
         new_fault = run_target(argv, hang_tmout);
 
+        /* A corner case that one user reported bumping into: increasing the
+           timeout actually uncovers a crash. Make sure we don't discard it if
+           so. */
+
+        if (!stop_soon && new_fault == FAULT_CRASH) goto keep_as_crash;
+
         if (stop_soon || new_fault != FAULT_TMOUT) return keeping;
 
       }
 
 #ifndef SIMPLE_FILES
 
-      fn = alloc_printf("%s/hangs/id:%06llu,%s", out_dir,
-                        unique_hangs, describe_op(0));
+      fn = alloc_printf("%s/hangs/id:%06llu,%llu,%s", out_dir,
+                        unique_hangs, get_cur_time() - start_time,
+                        describe_op(0));
 
 #else
 
@@ -3336,6 +3335,8 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
       break;
 
     case FAULT_CRASH:
+
+keep_as_crash:
 
       /* This is handled in a manner roughly similar to timeouts,
          except for slightly different limits and no need to re-run test
@@ -3361,8 +3362,9 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 
 #ifndef SIMPLE_FILES
 
-      fn = alloc_printf("%s/crashes/id:%06llu,sig:%02u,%s", out_dir,
-                        unique_crashes, kill_signal, describe_op(0));
+      fn = alloc_printf("%s/crashes/id:%06llu,%llu,sig:%02u,%s", out_dir,
+                        unique_crashes, get_cur_time() - start_time,
+                        kill_signal, describe_op(0));
 
 #else
 
@@ -3529,6 +3531,7 @@ static void write_stats_file(double bitmap_cvg, double stability, double eps) {
              "exec_timeout      : %u\n"
              "afl_banner        : %s\n"
              "afl_version       : " VERSION "\n"
+             "target_mode       : %s%s%s%s%s%s%s\n"
              "command_line      : %s\n",
              start_time / 1000, get_cur_time() / 1000, getpid(),
              queue_cycle ? (queue_cycle - 1) : 0, total_execs, eps,
@@ -3537,7 +3540,13 @@ static void write_stats_file(double bitmap_cvg, double stability, double eps) {
              queued_variable, stability, bitmap_cvg, unique_crashes,
              unique_hangs, last_path_time / 1000, last_crash_time / 1000,
              last_hang_time / 1000, total_execs - last_crash_execs,
-             exec_tmout, use_banner, orig_cmdline);
+             exec_tmout, use_banner,
+             qemu_mode ? "qemu " : "", dumb_mode ? " dumb " : "",
+             no_forkserver ? "no_forksrv " : "", crash_mode ? "crash " : "",
+             persistent_mode ? "persistent " : "", deferred_mode ? "deferred " : "",
+             (qemu_mode || dumb_mode || no_forkserver || crash_mode ||
+              persistent_mode || deferred_mode) ? "" : "default",
+             orig_cmdline);
              /* ignore errors */
 
   fclose(f);
@@ -3802,9 +3811,13 @@ static void maybe_delete_out_dir(void) {
   /* Okay, let's get the ball rolling! First, we need to get rid of the entries
      in <out_dir>/.synced/.../id:*, if any are present. */
 
-  fn = alloc_printf("%s/.synced", out_dir);
-  if (delete_files(fn, NULL)) goto dir_cleanup_failed;
-  ck_free(fn);
+  if (!in_place_resume) {
+
+    fn = alloc_printf("%s/.synced", out_dir);
+    if (delete_files(fn, NULL)) goto dir_cleanup_failed;
+    ck_free(fn);
+
+  }
 
   /* Next, we need to clean up <out_dir>/queue/.state/ subdirectories: */
 
@@ -4533,7 +4546,8 @@ static void show_init_stats(void) {
 }
 
 
-/* Find first power of two greater or equal to val. */
+/* Find first power of two greater or equal to val (assuming val under
+   2^31). */
 
 static u32 next_p2(u32 val) {
 
@@ -7100,6 +7114,7 @@ EXP_ST void check_binary(u8* fname) {
 
     OKF(cPIN "Deferred forkserver binary detected.");
     setenv(DEFER_ENV_VAR, "1", 1);
+    deferred_mode = 1;
 
   } else if (getenv("AFL_DEFER_FORKSRV")) {
 
@@ -7306,7 +7321,10 @@ EXP_ST void setup_dirs_fds(void) {
   if (sync_id) {
 
     tmp = alloc_printf("%s/.synced/", out_dir);
-    if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
+
+    if (mkdir(tmp, 0700) && (!in_place_resume || errno != EEXIST))
+      PFATAL("Unable to create '%s'", tmp);
+
     ck_free(tmp);
 
   }
@@ -7754,6 +7772,10 @@ static char** get_qemu_argv(u8* own_loc, char** argv, int argc) {
   char** new_argv = ck_alloc(sizeof(char*) * (argc + 4));
   u8 *tmp, *cp, *rsl, *own_copy;
 
+  /* Workaround for a QEMU stability glitch. */
+
+  setenv("QEMU_LOG", "nochain", 1);
+
   memcpy(new_argv + 3, argv + 1, sizeof(char*) * argc);
 
   new_argv[2] = target_path;
@@ -8114,8 +8136,9 @@ int main(int argc, char** argv) {
 
   if (getenv("AFL_NO_FORKSRV"))    no_forkserver    = 1;
   if (getenv("AFL_NO_CPU_RED"))    no_cpu_meter_red = 1;
-  if (getenv("AFL_NO_ARITH"))      no_arith = 1;
+  if (getenv("AFL_NO_ARITH"))      no_arith         = 1;
   if (getenv("AFL_SHUFFLE_QUEUE")) shuffle_queue    = 1;
+  if (getenv("AFL_FAST_CAL"))      fast_cal         = 1;
 
   if (getenv("AFL_HANG_TMOUT")) {
     hang_tmout = atoi(getenv("AFL_HANG_TMOUT"));
@@ -8272,8 +8295,8 @@ stop_fuzzing:
   if (queue_cycle == 1 && get_cur_time() - start_time > 30 * 60 * 1000) {
 
     SAYF("\n" cYEL "[!] " cRST
-         "Stopped during the first cycle, results may be incomplete.\n"
-         "    (For info on resuming, see %s/README.)\n", doc_path);
+           "Stopped during the first cycle, results may be incomplete.\n"
+           "    (For info on resuming, see %s/README.)\n", doc_path);
 
   }
 
