@@ -323,7 +323,7 @@
    
 */
 #define MATRIX_SIZE_POW2    16
-#define MATRIX_SIZE         (1 << MATRIX_SIZE_POW2)
+#define MATRIX_SIZE         10111011100000
 #define MATRIX_SIZE_SQUARE  11
 #define MATRIX_SIZE_SIDE    (1 << MATRIX_SIZE_SQUARE)
 
