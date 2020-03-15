@@ -451,6 +451,7 @@ bool AFLCoverage::runOnModule(Module &M) {
     ConstantInt *MapDistLoc = ConstantInt::get(LargestType, MAP_SIZE);
     ConstantInt *One = ConstantInt::get(LargestType, 1);
 
+
     /* Get globals for the SHM region and the previous location. Note that
        __afl_prev_loc is thread-local. */
 
@@ -462,14 +463,16 @@ bool AFLCoverage::runOnModule(Module &M) {
         M, Int32Ty, false, GlobalValue::ExternalLinkage, 0, "__afl_prev_loc",
         0, GlobalVariable::GeneralDynamicTLSModel, 0, false);
 	
-	GlobalVariable *AFLGoMapPtr =
+	/*GlobalVariable *AFLGoMapPtr =
 		  new GlobalVariable(M, PointerType::get(Int8Ty, 0), false,
 							 GlobalValue::ExternalLinkage, 0, "__aflgo_area_ptr");
 		  
 	GlobalVariable *AFLGoPrevLoc = new GlobalVariable(
 		  M, Int32Ty, false, GlobalValue::ExternalLinkage, 0, "__aflgo_prev_loc",
 		  0, GlobalVariable::GeneralDynamicTLSModel, 0, false);
-
+    */
+	int pre_number = 0;
+	
     for (auto &F : M) {
 
       int distance = -1;
@@ -599,39 +602,67 @@ bool AFLCoverage::runOnModule(Module &M) {
         }
 		
 		if (number > 0){
+			/* find prev basic block's number*/
+			
+			unsigned int upre_number = (unsigned) pre_number;
+			
 			/* find current basic block's number*/
 		
 			unsigned int unumber = (unsigned) number;
-			ConstantInt *CurLocation = ConstantInt::get(Int32Ty, unumber);
-							
+						
+			
+			#ifdef __x86_64__
+			IntegerType *LargestType = Int64Ty;
+			ConstantInt *MapCurLoc = ConstantInt::get(LargestType, MAP_SIZE + 8 + ((upre_number - 1) * MATRIX_SIZE_POW2 + unumber) * 8);
+			#else
+			IntegerType *LargestType = Int32Ty;
+			ConstantInt *MapCurLoc = ConstantInt::get(LargestType, MAP_SIZE + 4 + ((upre_number - 1) * MATRIX_SIZE_POW2 + unumber) * 4);
+			#endif
+			
+			pre_number = number;
+			
+            /* Increase count at shm[MAPSIZE + (4 or 8) + (      )] */
+
+            Value *MapCurPtr = IRB.CreateBitCast(
+                IRB.CreateGEP(MapPtr, MapCurLoc), LargestType->getPointerTo());
+            LoadInst *MapCur = IRB.CreateLoad(MapCurPtr);
+            MapCur->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+
+            Value *IncrCur = IRB.CreateAdd(MapCur, One);
+            IRB.CreateStore(IncrCur, MapCurPtr)
+                ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+			  
+			 
 			/* find previous basic block's number */
-								
+			
+            /*			
 			LoadInst *PrevLocation = IRB.CreateLoad(AFLGoPrevLoc);
 			PrevLocation->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
-			Value *PrevLocationCasted = IRB.CreateZExt(PrevLocation, IRB.getInt32Ty());
+			Value *PrevLocationCasted = IRB.CreateZExt(PrevLocation, IRB.getInt32Ty());*/
 								
 			/* Load SHM pointer ;Find the location in Shared memory by previous basic block's number and 
 			   current basic block's number*/
 
-			LoadInst *MapPointer = IRB.CreateLoad(AFLGoMapPtr);
+			/*LoadInst *MapPointer = IRB.CreateLoad(AFLGoMapPtr);
 			MapPointer->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
 			Value *MapPointerIdx =
-					IRB.CreateGEP(MapPointer, IRB.CreateXor(PrevLocationCasted, CurLocation));
+					IRB.CreateGEP(MapPointer, IRB.CreateXor(PrevLocationCasted, CurLocation));*/
 								
 			/* Count the number of executions of the branch and stores it to the SHM(MATRIX)*/
 								
-			LoadInst *BCounter = IRB.CreateLoad(MapPointerIdx);
+			/*LoadInst *BCounter = IRB.CreateLoad(MapPointerIdx);
 			BCounter->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
 			Value *BIncr = IRB.CreateAdd(BCounter, ConstantInt::get(Int8Ty, 1));
 			IRB.CreateStore(BIncr, MapPointerIdx)
-				   ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+				   ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));*/
 		
 		
 			/* Set PrevLocation to CurLocation */
 
-			StoreInst *BStore =
+			/*StoreInst *BStore =
 				IRB.CreateStore(ConstantInt::get(Int32Ty, unumber >> 1), AFLGoPrevLoc);
 			BStore->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+			*/
 								
 			ACTF(" instrumentation success !!!!!!! ");
 

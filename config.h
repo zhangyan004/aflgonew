@@ -371,4 +371,4 @@
 
 #endif /* ! _HAVE_CONFIG_H */
 
-extern unsigned int unumber;
+//extern unsigned int unumber;

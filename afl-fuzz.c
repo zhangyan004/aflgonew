@@ -1258,7 +1258,6 @@ static inline void classify_counts(u32* mem) {
 static void remove_shm(void) {
 
   shmctl(shm_id, IPC_RMID, NULL);
-  shmctl(shm_matrix_id, IPC_RMID, NULL);
 
 }
 
@@ -1404,24 +1403,26 @@ EXP_ST void setup_shm(void) {
 
   if (!in_bitmap) {
 	  memset(virgin_bits, 255, MAP_SIZE);
-      memset(branch_matrix, 255, MATRIX_SIZE);
     }
+	
   memset(virgin_tmout, 255, MAP_SIZE);
   memset(virgin_crash, 255, MAP_SIZE);
   
-  memset(frequent_matrix, 255, MATRIX_SIZE);
-  memset(not_frequent_matrix, 255, MATRIX_SIZE);
+  memset(branch_matrix, 0, MATRIX_SIZE);
+  memset(frequent_matrix, 0, MATRIX_SIZE);
+  memset(not_frequent_matrix, 0, MATRIX_SIZE);
 
   /* Allocate 24 byte more for distance info */
-  shm_id = shmget(IPC_PRIVATE, MAP_SIZE + 16, IPC_CREAT | IPC_EXCL | 0600);
-  shm_matrix_id = shmget(IPC_PRIVATE, MATRIX_SIZE, IPC_CREAT | IPC_EXCL | 0600);
+  shm_id = shmget(IPC_PRIVATE, MAP_SIZE + 16 + MATRIX_SIZE, IPC_CREAT | IPC_EXCL | 0600);
+  //shm_matrix_id = shmget(IPC_PRIVATE, MATRIX_SIZE, IPC_CREAT | IPC_EXCL | 0600);
    
-  if (shm_id < 0 || shm_matrix_id < 0) PFATAL("shmget() failed");
+ // if (shm_id < 0 || shm_matrix_id < 0) PFATAL("shmget() failed");
+  if (shm_id < 0) PFATAL("shmget() failed");
 
   atexit(remove_shm);
 
   shm_str = alloc_printf("%d", shm_id);
-  shm_str1 = alloc_printf("%d", shm_matrix_id);
+  //shm_str1 = alloc_printf("%d", shm_matrix_id);
 
   /* If somebody is asking us to fuzz instrumented binaries in dumb mode,
      we don't want them to detect instrumentation, since we won't be sending
@@ -1430,16 +1431,17 @@ EXP_ST void setup_shm(void) {
 
   if (!dumb_mode) {
 	  setenv(SHM_ENV_VAR, shm_str, 1);
-      setenv(SHM_ENV_VARI, shm_str1, 1);
+     // setenv(SHM_ENV_VARI, shm_str1, 1);
   }
   
   ck_free(shm_str);
-  ck_free(shm_str1);
+ // ck_free(shm_str1);
 
   trace_bits = shmat(shm_id, NULL, 0);
-  trace_branch = shmat(shm_matrix_id, NULL, 0);
+  //trace_branch = shmat(shm_matrix_id, NULL, 0);
   
-  if (!trace_bits || !trace_branch) PFATAL("shmat() failed");
+  //if (!trace_bits || !trace_branch) PFATAL("shmat() failed");
+  if (!trace_bits) PFATAL("shmat() failed");
 
 }
 
@@ -2163,7 +2165,7 @@ EXP_ST void init_forkserver(char** argv) {
        falling through. */
 
     *(u32*)trace_bits = EXEC_FAIL_SIG;
-	*(u32*)trace_branch = EXEC_FAIL_SIG;
+	//*(u32*)trace_branch = EXEC_FAIL_SIG;
     exit(0);
 
   }
@@ -2275,7 +2277,7 @@ EXP_ST void init_forkserver(char** argv) {
 
   }
 
-  if (*(u32*)trace_bits == EXEC_FAIL_SIG || *(u32*)trace_branch == EXEC_FAIL_SIG)
+  if (*(u32*)trace_bits == EXEC_FAIL_SIG)
     FATAL("Unable to execute target application ('%s')", argv[0]);
 
   if (mem_limit && mem_limit < 500 && uses_asan) {
@@ -2337,7 +2339,8 @@ static u8 run_target(char** argv, u32 timeout) {
   static u32 prev_timed_out = 0;
 
   int status = 0;
-  u32 tb4,tbh;
+  //u32 tb4,tbh;
+  u32 tb4;
 
   child_timed_out = 0;
 
@@ -2345,8 +2348,8 @@ static u8 run_target(char** argv, u32 timeout) {
      must prevent any earlier operations from venturing into that
      territory. */
 
-  memset(trace_bits, 0, MAP_SIZE + 16);
-  memset(trace_branch, 0, MATRIX_SIZE);
+  memset(trace_bits, 0, MAP_SIZE + 16 + MATRIX_SIZE);
+  //memset(trace_branch, 0, MATRIX_SIZE);
   
   MEM_BARRIER();
 
@@ -2428,7 +2431,7 @@ static u8 run_target(char** argv, u32 timeout) {
          falling through. */
 
       *(u32*)trace_bits = EXEC_FAIL_SIG;
-	  *(u32*)trace_branch = EXEC_FAIL_SIG;
+	 // *(u32*)trace_branch = EXEC_FAIL_SIG;
 	  
       exit(0);
 
@@ -2501,7 +2504,7 @@ static u8 run_target(char** argv, u32 timeout) {
   MEM_BARRIER();
 
   tb4 = *(u32*)trace_bits;
-  tbh = *(u32*)trace_branch;
+  //tbh = *(u32*)trace_branch;
 
 #ifdef __x86_64__
   classify_counts((u64*)trace_bits);
