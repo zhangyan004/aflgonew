@@ -879,15 +879,15 @@ EXP_ST void write_bitmap(void) {
  // fn = alloc_printf("%s/fuzzing_MATRIX", out_dir);
  // fdd = open(fn, O_WRONLY | O_CREAT | O_TRUNC, 0600);
 
-  if (fd < 0 || fdd < 0) PFATAL("Unable to open '%s'", fname);
+  if (fd < 0 ) PFATAL("Unable to open '%s'", fname);
 
   ck_write(fd, virgin_bits, MAP_SIZE, fname);
-  ck_write(fdd, branch_matrix, MATRIX_SIZE, fn);
+  //ck_write(fdd, branch_matrix, MATRIX_SIZE, fn);
 
   close(fd);
-  close(fdd);
+  //close(fdd);
   ck_free(fname);
-  ck_free(fn);
+  //ck_free(fn);
 
 }
 
