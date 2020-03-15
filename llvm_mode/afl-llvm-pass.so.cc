@@ -241,7 +241,7 @@ bool AFLCoverage::runOnModule(Module &M) {
 				       std::string bbname = line.substr(0, position);
 				       int bbnumber = (int) (100.0 * atof(line.substr(position + 1, line.length()).c_str()));
 
-				       bb_to_number.insert(bbname, bbnumber);
+				       bb_to_number.emplace(bbname, bbnumber);
         	
 			        }
 			         cff.close(); 
