@@ -145,7 +145,7 @@ static s32 forksrv_pid,               /* PID of the fork server           */
            out_dir_fd = -1;           /* FD of the lock file              */
 
 EXP_ST u8* trace_bits;                /* SHM with instrumentation bitmap  */
-EXP_ST u8* trace_branch;              /* SHM with instrumentation the number of basic blocks*/
+//EXP_ST u8* trace_branch;              /* SHM with instrumentation the number of basic blocks*/
 
 EXP_ST u8  virgin_bits[MAP_SIZE],     /* Regions yet untouched by fuzzing */
            virgin_tmout[MAP_SIZE],    /* Bits we haven't seen in tmouts   */
@@ -156,7 +156,8 @@ EXP_ST u8  virgin_bits[MAP_SIZE],     /* Regions yet untouched by fuzzing */
 
 static u8  var_bytes[MAP_SIZE];       /* Bytes that appear to be variable */
 
-static s32 shm_id,shm_matrix_id;      /* ID of the SHM region             */
+//static s32 shm_id,shm_matrix_id;      /* ID of the SHM region             */
+static s32 shm_id;                     /* ID of the SHM region             */
 
 static volatile u8 stop_soon,         /* Ctrl-C pressed?                  */
                    clear_screen = 1,  /* Window resized?                  */
@@ -875,8 +876,8 @@ EXP_ST void write_bitmap(void) {
   fname = alloc_printf("%s/fuzz_bitmap", out_dir);
   fd = open(fname, O_WRONLY | O_CREAT | O_TRUNC, 0600);
   
-  fn = alloc_printf("%s/fuzzing_MATRIX", out_dir);
-  fdd = open(fn, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+ // fn = alloc_printf("%s/fuzzing_MATRIX", out_dir);
+ // fdd = open(fn, O_WRONLY | O_CREAT | O_TRUNC, 0600);
 
   if (fd < 0 || fdd < 0) PFATAL("Unable to open '%s'", fname);
 
@@ -1399,7 +1400,7 @@ static void cull_queue(void) {
 EXP_ST void setup_shm(void) {
 
   u8* shm_str;
-  u8* shm_str1;
+  //u8* shm_str1;
 
   if (!in_bitmap) {
 	  memset(virgin_bits, 255, MAP_SIZE);
