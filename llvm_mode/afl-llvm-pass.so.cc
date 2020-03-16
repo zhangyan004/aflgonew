@@ -613,10 +613,10 @@ bool AFLCoverage::runOnModule(Module &M) {
 			
 			#ifdef __x86_64__
 			IntegerType *LargestType = Int64Ty;
-			ConstantInt *MapCurLoc = ConstantInt::get(LargestType, MAP_SIZE + 8 + (((upre_number - 2) % define MATRIX_SIZE_SIDE )* MATRIX_SIZE + unumber - 1) * 8);
+			ConstantInt *MapCurLoc = ConstantInt::get(LargestType, MAP_SIZE + 8 + (((upre_number - 2) % MATRIX_SIZE_SIDE )* MATRIX_SIZE + unumber - 1) * 8);
 			#else
 			IntegerType *LargestType = Int32Ty;
-			ConstantInt *MapCurLoc = ConstantInt::get(LargestType, MAP_SIZE + 4 + (((upre_number - 2) % define MATRIX_SIZE_SIDE )* MATRIX_SIZE + unumber - 1) * 4);
+			ConstantInt *MapCurLoc = ConstantInt::get(LargestType, MAP_SIZE + 4 + (((upre_number - 2) % MATRIX_SIZE_SIDE )* MATRIX_SIZE + unumber - 1) * 4);
 			#endif
 			
 			pre_number = number;
