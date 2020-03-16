@@ -265,7 +265,6 @@
 /* Environment variable used to pass SHM ID to the called program. */
 
 #define SHM_ENV_VAR         "__AFL_SHM_ID"
-#define SHM_ENV_VARI        "__AFL_SHM_MATRIX_ID"
 
 /* Other less interesting, internal-only variables. */
 
@@ -323,8 +322,8 @@
    
 */
 #define MATRIX_SIZE_POW2    16
-#define MATRIX_SIZE         10111011100000
-#define MATRIX_SIZE_SQUARE  11
+#define MATRIX_SIZE         (1 << MATRIX_SIZE_POW2)
+#define MATRIX_SIZE_SQUARE  8
 #define MATRIX_SIZE_SIDE    (1 << MATRIX_SIZE_SQUARE)
 
 /* Maximum allocator request size (keep well under INT_MAX): */
