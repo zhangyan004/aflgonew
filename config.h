@@ -321,9 +321,9 @@
    In Shared memory, each branch is stored in a corresponding location.
    
 */
-#define MATRIX_SIZE_POW2    16
+#define MATRIX_SIZE_POW2    14
 #define MATRIX_SIZE         (1 << MATRIX_SIZE_POW2)
-#define MATRIX_SIZE_SQUARE  8
+#define MATRIX_SIZE_SQUARE  7
 #define MATRIX_SIZE_SIDE    (1 << MATRIX_SIZE_SQUARE)
 
 /* Maximum allocator request size (keep well under INT_MAX): */
